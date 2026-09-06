@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 
@@ -110,48 +110,149 @@ function Ensure-Node {
     Write-Host "✓ Node.js $(& node --version) พร้อมใช้งาน" -ForegroundColor Green
 }
 
-function Test-IsOneDriveDesktop([string]$DesktopPath) {
-    $roots = @(
-        $env:OneDrive,
-        $env:OneDriveConsumer,
-        $env:OneDriveCommercial
-    ) | Where-Object { $_ }
+function Ensure-FolderShortcut([string]$ShortcutPath, [string]$TargetFolder) {
+    # WScript.Shell can fail when the .lnk path contains non-ANSI characters
+    # (for example a Thai OneDrive Desktop folder). Use the Unicode-native
+    # IShellLinkW interface instead.
+    if (-not ('StageZero.UnicodeShortcut' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
 
-    foreach ($root in $roots) {
-        try {
-            $rootFull = [IO.Path]::GetFullPath($root).TrimEnd('\')
-            $desktopFull = [IO.Path]::GetFullPath($DesktopPath)
-            if ($desktopFull.StartsWith($rootFull + '\', [StringComparison]::OrdinalIgnoreCase) -or
-                $desktopFull.Equals($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
-                return $true
-            }
-        }
-        catch {}
+namespace StageZero
+{
+    [ComImport]
+    [Guid("00021401-0000-0000-C000-000000000046")]
+    internal class ShellLink
+    {
     }
 
-    return ($DesktopPath -match '\\OneDrive(?: - [^\\]+)?\\')
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("000214F9-0000-0000-C000-000000000046")]
+    internal interface IShellLinkW
+    {
+        void GetPath(
+            [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile,
+            int cchMaxPath,
+            IntPtr pfd,
+            uint fFlags);
+
+        void GetIDList(out IntPtr ppidl);
+        void SetIDList(IntPtr pidl);
+
+        void GetDescription(
+            [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName,
+            int cchMaxName);
+
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+
+        void GetWorkingDirectory(
+            [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir,
+            int cchMaxPath);
+
+        void SetWorkingDirectory(
+            [MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+
+        void GetArguments(
+            [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs,
+            int cchMaxPath);
+
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        void GetHotkey(out short pwHotkey);
+        void SetHotkey(short wHotkey);
+        void GetShowCmd(out int piShowCmd);
+        void SetShowCmd(int iShowCmd);
+
+        void GetIconLocation(
+            [Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath,
+            int cchIconPath,
+            out int piIcon);
+
+        void SetIconLocation(
+            [MarshalAs(UnmanagedType.LPWStr)] string pszIconPath,
+            int iIcon);
+
+        void SetRelativePath(
+            [MarshalAs(UnmanagedType.LPWStr)] string pszPathRel,
+            uint dwReserved);
+
+        void Resolve(IntPtr hwnd, uint fFlags);
+
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("0000010b-0000-0000-C000-000000000046")]
+    internal interface IPersistFile
+    {
+        void GetClassID(out Guid pClassID);
+
+        [PreserveSig]
+        int IsDirty();
+
+        void Load(
+            [MarshalAs(UnmanagedType.LPWStr)] string pszFileName,
+            uint dwMode);
+
+        void Save(
+            [MarshalAs(UnmanagedType.LPWStr)] string pszFileName,
+            bool fRemember);
+
+        void SaveCompleted(
+            [MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+
+        void GetCurFile(
+            [MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+    }
+
+    public static class UnicodeShortcut
+    {
+        public static void Create(string shortcutPath, string targetFolder)
+        {
+            IShellLinkW link = (IShellLinkW)new ShellLink();
+
+            link.SetPath(targetFolder);
+            link.SetWorkingDirectory(targetFolder);
+            link.SetDescription("SillyTavern folder");
+            link.SetIconLocation(
+                Environment.ExpandEnvironmentVariables(
+                    @"%SystemRoot%\System32\shell32.dll"),
+                3);
+
+            IPersistFile persist = (IPersistFile)link;
+            persist.Save(shortcutPath, true);
+        }
+    }
+}
+'@
+    }
+
+    [StageZero.UnicodeShortcut]::Create($ShortcutPath, $TargetFolder)
+
+    if (-not (Test-Path $ShortcutPath)) {
+        throw "สร้างทางลัด SillyTavern บน Desktop ไม่สำเร็จ"
+    }
 }
 
-function Ensure-FolderShortcut([string]$ShortcutPath, [string]$TargetFolder) {
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($ShortcutPath)
-    $shortcut.TargetPath = $TargetFolder
-    $shortcut.WorkingDirectory = $TargetFolder
-    $shortcut.Description = 'SillyTavern folder'
-    $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,3"
-    $shortcut.Save()
+
+function Try-Ensure-FolderShortcut([string]$ShortcutPath, [string]$TargetFolder) {
+    try {
+        Ensure-FolderShortcut $ShortcutPath $TargetFolder
+        return $true
+    }
+    catch {
+        Write-Host ""
+        Write-Host "⚠ สร้างทางลัด SillyTavern บน Desktop ไม่สำเร็จ" -ForegroundColor Yellow
+        Write-Host "แต่ SillyTavern ยังติดตั้งและใช้งานได้ตามปกติ" -ForegroundColor Yellow
+        return $false
+    }
 }
 
-$DesktopUsesOneDrive = Test-IsOneDriveDesktop $DisplayedDesktop
-
-if ($DesktopUsesOneDrive) {
-    $InstallDir = Join-Path $env:USERPROFILE 'SillyTavern'
-    $FolderShortcut = Join-Path $DisplayedDesktop 'SillyTavern.lnk'
-}
-else {
-    $InstallDir = Join-Path $DisplayedDesktop 'SillyTavern'
-    $FolderShortcut = $null
-}
+$InstallDir = Join-Path $env:USERPROFILE 'SillyTavern'
+$FolderShortcut = Join-Path $DisplayedDesktop 'SillyTavern.lnk'
 
 Clear-Host
 Write-Host '========================================' -ForegroundColor Cyan
@@ -183,17 +284,15 @@ try {
                 (Test-Path (Join-Path $InstallDir 'Start.bat'))
 
         if ($isST) {
-            if ($DesktopUsesOneDrive) {
-                Ensure-FolderShortcut $FolderShortcut $InstallDir
-            }
+            [void](Try-Ensure-FolderShortcut $FolderShortcut $InstallDir)
 
             Write-Host ""
             Write-Host 'พบ SillyTavern ที่ติดตั้งอยู่แล้ว' -ForegroundColor Yellow
             Write-Host 'Installer จะไม่เขียนทับของเดิม'
             Write-Host ""
+            Write-Host 'กำลังเปิดโฟลเดอร์ SillyTavern ให้...' -ForegroundColor Cyan
             Start-Process explorer.exe -ArgumentList "`"$InstallDir`""
-            Read-Host 'กด Enter เพื่อปิดหน้าจอนี้'
-            exit 0
+            return
         }
 
         throw "มีโฟลเดอร์ $InstallDir อยู่แล้ว แต่ไม่ใช่ SillyTavern กรุณาเปลี่ยนชื่อหรือย้ายโฟลเดอร์นี้ก่อน"
@@ -213,9 +312,7 @@ try {
         throw 'ดาวน์โหลดเสร็จแต่ไม่พบ Start.bat การติดตั้งอาจไม่สมบูรณ์'
     }
 
-    if ($DesktopUsesOneDrive) {
-        Ensure-FolderShortcut $FolderShortcut $InstallDir
-    }
+    [void](Try-Ensure-FolderShortcut $FolderShortcut $InstallDir)
 
     Write-Host ""
     Write-Host '========================================' -ForegroundColor Green
@@ -242,5 +339,3 @@ catch {
     Write-Host ""
 }
 
-Write-Host ""
-Read-Host 'กด Enter เพื่อปิดหน้าจอนี้'
