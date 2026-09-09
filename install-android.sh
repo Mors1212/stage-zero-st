@@ -344,6 +344,7 @@ CONFIG_BACKUP_DIR="$HELPER_DIR/config-backups"
 LAUNCHER_PATH="${PREFIX:-/data/data/com.termux/files/usr}/bin/st"
 DOWNLOADS_DIR="$HOME/storage/downloads"
 BACKUP_DIR="$DOWNLOADS_DIR/Stage Zero Backups"
+RETURN_TO_MAIN=0
 
 # สีของข้อความ Stage Zero เพื่อแยก UI ของ Helper ออกจาก log ปกติของ Termux/SillyTavern.
 if [[ -t 1 && "${TERM:-dumb}" != "dumb" ]]; then
@@ -581,6 +582,11 @@ update_and_start() {
         printf '\nSillyTavern หยุดทำงานแล้ว\n'
         pause_screen
     else
+        # A failed pull --rebase may leave Git in an interrupted state.
+        # Abort only the incomplete operation so the previous version can still start cleanly.
+        git -C "$ST_DIR" rebase --abort >/dev/null 2>&1 || true
+        git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
+
         printf '\nอัปเดตไม่สำเร็จ แต่ข้อมูลผู้ใช้ยังไม่ถูกลบ\n'
         printf '\n1. เปิด SillyTavern เวอร์ชันเดิมต่อ\n'
         printf '0. กลับเมนู\n\n'
@@ -720,28 +726,28 @@ repair_st() {
 
     okf '✓ เครื่องมือพื้นฐานครบ\n'
 
-   if [[ -d "$ST_DIR/.git" ]]; then
-       # Clear only interrupted Git operations; never hard-reset user files.
-       git -C "$ST_DIR" rebase --abort >/dev/null 2>&1 || true
-       git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
+    if [[ -d "$ST_DIR/.git" ]]; then
+        # Clear only interrupted Git operations; never hard-reset user files.
+        git -C "$ST_DIR" rebase --abort >/dev/null 2>&1 || true
+        git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
 
-       if git -C "$ST_DIR" pull --rebase --autostash; then
-          okf '✓ Git / ไฟล์โปรแกรมปกติ\n'
-       else
-          warnf '⚠ อัปเดต Git ไม่สำเร็จ\n'
-          printf 'ระบบหยุดการซ่อมไว้ก่อนเพื่อป้องกันการแก้ไขไฟล์เพิ่มเติม\n'
+        if git -C "$ST_DIR" pull --rebase --autostash; then
+            okf '✓ Git / ไฟล์โปรแกรมปกติ\n'
+        else
+            warnf '⚠ อัปเดต Git ไม่สำเร็จ\n'
+            printf 'ระบบหยุดการซ่อมไว้ก่อนเพื่อป้องกันการแก้ไขไฟล์เพิ่มเติม\n'
 
-          # Clean up a rebase/merge that may have been started by the failed pull.
-          git -C "$ST_DIR" rebase --abort >/dev/null 2>&1 || true
-          git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
+            # Clean up a rebase/merge that may have been started by the failed pull.
+            git -C "$ST_DIR" rebase --abort >/dev/null 2>&1 || true
+            git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
 
-          printf '\nลองเปิด "ข้อมูลสำหรับแจ้งปัญหา" แล้วส่งให้ทีมงานตรวจสอบ\n'
-          pause_screen
-          return
-       fi
-   else
-      warnf '⚠ ไม่พบ Git repository — ข้ามการซ่อมส่วนอัปเดต\n'
-   fi
+            printf '\nลองเปิด "ข้อมูลสำหรับแจ้งปัญหา" แล้วส่งให้ทีมงานตรวจสอบ\n'
+            pause_screen
+            return
+        fi
+    else
+        warnf '⚠ ไม่พบ Git repository — ข้ามการซ่อมส่วนอัปเดต\n'
+    fi
 
     infof 'กำลังติดตั้ง Node modules ใหม่...\n'
     if (
@@ -761,7 +767,7 @@ repair_st() {
         (cd "$ST_DIR" && npm run init >/dev/null 2>&1) || true
     fi
 
-    printf '\nซ่อมเสร็จแล้ว\n\n'
+    okf '\n✓ ตรวจสอบและซ่อมส่วนประกอบพื้นฐานเรียบร้อย\n\n'
     printf '1. เปิด SillyTavern\n'
     printf '2. ข้อมูลสำหรับแจ้งปัญหา\n'
     printf '0. กลับ\n\n'
@@ -1048,7 +1054,7 @@ backup_zip_supported() {
 
     # Stage Zero backups have our marker plus a SillyTavern user-data tree.
     if printf '%s\n' "$names" | grep -Fxq 'stagezero-backup-info.txt' && \
-       printf '%s\n' "$names" | grep -Eq '^data/default-user/(settings\.json|characters/|chats/|worlds/|themes/)'; then
+        printf '%s\n' "$names" | grep -Eq '^data/default-user/(settings\.json|characters/|chats/|worlds/|themes/)'; then
         return 0
     fi
 
