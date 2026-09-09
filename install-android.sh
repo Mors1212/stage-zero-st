@@ -810,13 +810,19 @@ create_backup() {
     ensure_storage || return 1
     ensure_st || return 1
 
+    local user_dir="$ST_DIR/data/default-user"
     local has_data=0
     local has_config=0
-    [[ -d "$ST_DIR/data/default-user" ]] && has_data=1
+
+    # Only create a backup when recognisable SillyTavern user data exists.
+    # config.yaml by itself is not considered a user backup.
+    if [[ -f "$user_dir/settings.json" || -d "$user_dir/characters" || -d "$user_dir/chats" || -d "$user_dir/worlds" || -d "$user_dir/themes" ]]; then
+        has_data=1
+    fi
     [[ -f "$ST_DIR/config.yaml" ]] && has_config=1
 
-    if (( has_data == 0 && has_config == 0 )); then
-        printf 'ยังไม่มีข้อมูลสำหรับสำรอง\n'
+    if (( has_data == 0 )); then
+        printf 'ยังไม่มีข้อมูลผู้ใช้สำหรับสำรอง\n'
         return 1
     fi
 
@@ -1119,13 +1125,13 @@ restore_menu() {
     printf '%s\n\n' '- SillyTavern User Backup (.zip)'
     printf 'API Key / secrets.json จะไม่ถูกนำเข้าจาก Backup\n\n'
 
-    collect_backup_files || { pause_screen; return; }
+    collect_backup_files || { pause_screen; return 2; }
 
     if (( ${#BACKUP_FILES[@]} == 0 )); then
         printf 'ไม่พบไฟล์ Backup ของ SillyTavern ใน Downloads\n'
         printf 'ให้นำ Stage Zero Backup หรือ SillyTavern User Backup ไปไว้ใน Download แล้วลองใหม่\n'
         pause_screen
-        return
+        return 2
     fi
 
     local i=1
@@ -1140,12 +1146,12 @@ restore_menu() {
     read_choice choice
 
     if [[ "$choice" == "0" ]]; then
-        return
+        return 2
     fi
     if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#BACKUP_FILES[@]} )); then
         printf '\nตัวเลือกไม่ถูกต้อง\n'
         pause_screen
-        return
+        return 2
     fi
 
     local selected="${BACKUP_FILES[choice-1]}"
@@ -1160,11 +1166,14 @@ restore_menu() {
         printf '\n'
         if restore_from_zip "$selected"; then
             post_restore_action
-            return
+            return 0
         else
             pause_screen
+            return 2
         fi
     fi
+
+    return 2
 }
 
 backup_restore_menu() {
@@ -1380,6 +1389,10 @@ case "${1:-}" in
             main_menu
         fi
         ;;
+    --restore-install)
+        restore_menu
+        exit $?
+        ;;
     --start)
         start_st
         ;;
@@ -1425,8 +1438,15 @@ finish_install() {
         local choice
         read_choice choice
         if [[ "$choice" == "1" ]]; then
-            "$MENU_PATH" --restore
-            return
+            "$MENU_PATH" --restore-install
+            local restore_status=$?
+
+            # A successful restore already shows the post-restore action menu.
+            if (( restore_status == 0 )); then
+                return
+            fi
+            # If no backup was found, the user cancelled, or restore failed,
+            # continue below and let the user choose whether to open ST or exit.
         elif [[ "$choice" == "2" ]]; then
             printf '\nกำลังเปิด SillyTavern...\n'
             "$MENU_PATH" --start
