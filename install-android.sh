@@ -1403,14 +1403,6 @@ LAUNCHER_EOF
     chmod +x "$LAUNCHER_PATH"
 }
 
-backup_exists() {
-    [[ -d "$DOWNLOADS_DIR" ]] || return 1
-    shopt -s nullglob
-    local files=("$BACKUP_DIR"/*.zip "$DOWNLOADS_DIR"/*.zip)
-    shopt -u nullglob
-    (( ${#files[@]} > 0 ))
-}
-
 finish_install() {
     printf '\n'
     line
@@ -1425,11 +1417,10 @@ finish_install() {
         printf '\nหมายเหตุ: ถ้าเคยมี alias st เดิม ให้ปิดแล้วเปิด Termux ใหม่หนึ่งครั้ง\n'
     fi
 
-    if (( FRESH_INSTALL == 1 )) && backup_exists; then
-        printf '\nพบไฟล์ Backup ใน Downloads\n'
-        printf 'ต้องการกู้คืนข้อมูลเดิมตอนนี้ไหม?\n\n'
-        printf '1. กู้คืนจาก Backup\n'
-        printf '2. ไว้ทำทีหลัง\n\n'
+    if (( FRESH_INSTALL == 1 )); then
+        printf '\nต้องการตรวจสอบหาไฟล์ Backup ไหม?\n\n'
+        printf '1. ต้องการ\n'
+        printf '2. ไว้ทีหลัง\n\n'
         promptf 'เลือกเมนู: '
         local choice
         read_choice choice
