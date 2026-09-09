@@ -720,19 +720,28 @@ repair_st() {
 
     okf '✓ เครื่องมือพื้นฐานครบ\n'
 
-    if [[ -d "$ST_DIR/.git" ]]; then
-        # Clear only interrupted Git operations; never hard-reset user files.
-        git -C "$ST_DIR" rebase --abort >/dev/null 2>&1 || true
-        git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
+   if [[ -d "$ST_DIR/.git" ]]; then
+       # Clear only interrupted Git operations; never hard-reset user files.
+       git -C "$ST_DIR" rebase --abort >/dev/null 2>&1 || true
+       git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
 
-        if git -C "$ST_DIR" pull --rebase --autostash; then
-            okf '✓ Git / ไฟล์โปรแกรมปกติ\n'
-        else
-            warnf '⚠ อัปเดต Git ไม่สำเร็จ ระบบหยุดก่อนเพื่อไม่ลบไฟล์ที่คุณอาจแก้เอง\n'
-        fi
-    else
-        warnf '⚠ ไม่พบ Git repository — ข้ามการซ่อมส่วนอัปเดต\n'
-    fi
+       if git -C "$ST_DIR" pull --rebase --autostash; then
+          okf '✓ Git / ไฟล์โปรแกรมปกติ\n'
+       else
+          warnf '⚠ อัปเดต Git ไม่สำเร็จ\n'
+          printf 'ระบบหยุดการซ่อมไว้ก่อนเพื่อป้องกันการแก้ไขไฟล์เพิ่มเติม\n'
+
+          # Clean up a rebase/merge that may have been started by the failed pull.
+          git -C "$ST_DIR" rebase --abort >/dev/null 2>&1 || true
+          git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
+
+          printf '\nลองเปิด "ข้อมูลสำหรับแจ้งปัญหา" แล้วส่งให้ทีมงานตรวจสอบ\n'
+          pause_screen
+          return
+       fi
+   else
+      warnf '⚠ ไม่พบ Git repository — ข้ามการซ่อมส่วนอัปเดต\n'
+   fi
 
     infof 'กำลังติดตั้ง Node modules ใหม่...\n'
     if (
