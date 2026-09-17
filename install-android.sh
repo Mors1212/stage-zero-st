@@ -13,6 +13,7 @@ LAUNCHER_PATH="${PREFIX:-/data/data/com.termux/files/usr}/bin/st"
 DOWNLOADS_DIR="$HOME/storage/downloads"
 BACKUP_DIR="$DOWNLOADS_DIR/Stage Zero Backups"
 FRESH_INSTALL=0
+INSTALL_WAKE_LOCK_ACTIVE=0
 
 # สีของข้อความ Stage Zero; output จาก apt/git/SillyTavern จะยังใช้สีปกติของมันเอง.
 if [[ -t 1 && "${TERM:-dumb}" != "dumb" ]]; then
@@ -105,6 +106,25 @@ is_termux() {
 
 st_valid() {
     [[ -d "$ST_DIR" && -f "$ST_DIR/package.json" && -f "$ST_DIR/server.js" && -f "$ST_DIR/start.sh" ]]
+}
+
+acquire_install_wake_lock() {
+    if command -v termux-wake-lock >/dev/null 2>&1; then
+        if termux-wake-lock >/dev/null 2>&1; then
+            INSTALL_WAKE_LOCK_ACTIVE=1
+        fi
+    fi
+    return 0
+}
+
+release_install_wake_lock() {
+    if (( INSTALL_WAKE_LOCK_ACTIVE == 1 )); then
+        if command -v termux-wake-unlock >/dev/null 2>&1; then
+            termux-wake-unlock >/dev/null 2>&1 || true
+        fi
+        INSTALL_WAKE_LOCK_ACTIVE=0
+    fi
+    return 0
 }
 
 setup_storage() {
@@ -345,6 +365,7 @@ LAUNCHER_PATH="${PREFIX:-/data/data/com.termux/files/usr}/bin/st"
 DOWNLOADS_DIR="$HOME/storage/downloads"
 BACKUP_DIR="$DOWNLOADS_DIR/Stage Zero Backups"
 RETURN_TO_MAIN=0
+WAKE_LOCK_DEPTH=0
 
 # สีของข้อความ Stage Zero เพื่อแยก UI ของ Helper ออกจาก log ปกติของ Termux/SillyTavern.
 if [[ -t 1 && "${TERM:-dumb}" != "dumb" ]]; then
@@ -433,6 +454,42 @@ pause_screen() {
     promptf '\nกด Enter เพื่อกลับ...'
     read_choice _pause
 }
+
+acquire_wake_lock() {
+    if (( WAKE_LOCK_DEPTH == 0 )); then
+        if command -v termux-wake-lock >/dev/null 2>&1; then
+            termux-wake-lock >/dev/null 2>&1 || true
+        fi
+    fi
+    ((WAKE_LOCK_DEPTH += 1))
+    return 0
+}
+
+release_wake_lock() {
+    if (( WAKE_LOCK_DEPTH <= 0 )); then
+        WAKE_LOCK_DEPTH=0
+        return 0
+    fi
+
+    ((WAKE_LOCK_DEPTH -= 1))
+    if (( WAKE_LOCK_DEPTH == 0 )); then
+        if command -v termux-wake-unlock >/dev/null 2>&1; then
+            termux-wake-unlock >/dev/null 2>&1 || true
+        fi
+    fi
+    return 0
+}
+
+cleanup_wake_lock() {
+    if (( WAKE_LOCK_DEPTH > 0 )); then
+        if command -v termux-wake-unlock >/dev/null 2>&1; then
+            termux-wake-unlock >/dev/null 2>&1 || true
+        fi
+        WAKE_LOCK_DEPTH=0
+    fi
+}
+
+trap cleanup_wake_lock EXIT
 
 is_termux() {
     [[ -n "${PREFIX:-}" && "${PREFIX:-}" == *"com.termux"* ]]
@@ -545,9 +602,18 @@ show_support_info() {
 start_st() {
     screen_clear
     ensure_st || { pause_screen; return; }
+
+    acquire_wake_lock
     infof 'กำลังเปิด SillyTavern...\n\n'
-    cd "$ST_DIR" || return
+
+    if ! cd "$ST_DIR"; then
+        release_wake_lock
+        return
+    fi
+
     bash start.sh
+    release_wake_lock
+
     printf '\nSillyTavern หยุดทำงานแล้ว\n'
     pause_screen
 }
@@ -563,12 +629,14 @@ update_and_start() {
         return
     fi
 
+    acquire_wake_lock
     infof 'กำลังตรวจสอบและอัปเดต SillyTavern...\n\n'
 
     if https_stack_broken; then
         printf 'ตรวจพบส่วนเชื่อมต่อ HTTPS ของ Termux ไม่ตรงเวอร์ชัน กำลังซ่อม...\n'
         if ! sync_https_stack; then
             printf 'ซ่อม HTTPS ไม่สำเร็จ กรุณาใช้เมนู 3: ST เปิดไม่ได้ / แก้ปัญหา\n'
+            release_wake_lock
             pause_screen
             return
         fi
@@ -577,8 +645,12 @@ update_and_start() {
 
     if git -C "$ST_DIR" pull --rebase --autostash; then
         printf '\nอัปเดตเรียบร้อย กำลังเปิด SillyTavern...\n\n'
-        cd "$ST_DIR" || return
+        if ! cd "$ST_DIR"; then
+            release_wake_lock
+            return
+        fi
         bash start.sh
+        release_wake_lock
         printf '\nSillyTavern หยุดทำงานแล้ว\n'
         pause_screen
     else
@@ -593,10 +665,16 @@ update_and_start() {
         promptf 'เลือกเมนู: '
         local choice
         read_choice choice
+
         if [[ "$choice" == "1" ]]; then
-            cd "$ST_DIR" || return
+            if ! cd "$ST_DIR"; then
+                release_wake_lock
+                return
+            fi
             bash start.sh
         fi
+
+        release_wake_lock
     fi
 }
 
@@ -709,9 +787,12 @@ repair_st() {
     printf 'ST เปิดไม่ได้ / แก้ปัญหา\n\n'
     infof 'กำลังตรวจสอบและซ่อมอัตโนมัติ...\n\n'
 
+    acquire_wake_lock
+
     if ! install_required_packages; then
         errf '✗ ติดตั้งเครื่องมือที่จำเป็นไม่สำเร็จ\n'
         printf 'ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่\n'
+        release_wake_lock
         pause_screen
         return
     fi
@@ -720,6 +801,7 @@ repair_st() {
         errf '✗ พบว่าการติดตั้ง SillyTavern ไม่สมบูรณ์\n'
         printf 'เพื่อป้องกันข้อมูลหาย ระบบจะไม่ลบหรือเขียนทับโฟลเดอร์นี้อัตโนมัติ\n'
         printf 'ให้รัน Stage Zero Installer ใหม่เพื่อจัดการการติดตั้ง\n'
+        release_wake_lock
         pause_screen
         return
     fi
@@ -742,6 +824,7 @@ repair_st() {
             git -C "$ST_DIR" merge --abort >/dev/null 2>&1 || true
 
             printf '\nลองเปิด "ข้อมูลสำหรับแจ้งปัญหา" แล้วส่งให้ทีมงานตรวจสอบ\n'
+            release_wake_lock
             pause_screen
             return
         fi
@@ -759,6 +842,7 @@ repair_st() {
     else
         errf '✗ ติดตั้ง Node modules ไม่สำเร็จ\n'
         printf 'ตรวจสอบอินเทอร์เน็ตและพื้นที่เครื่อง แล้วลองใหม่\n'
+        release_wake_lock
         pause_screen
         return
     fi
@@ -766,6 +850,8 @@ repair_st() {
     if [[ ! -f "$ST_DIR/config.yaml" ]]; then
         (cd "$ST_DIR" && npm run init >/dev/null 2>&1) || true
     fi
+
+    release_wake_lock
 
     okf '\n✓ ตรวจสอบและซ่อมส่วนประกอบพื้นฐานเรียบร้อย\n\n'
     printf '1. เปิด SillyTavern\n'
@@ -893,11 +979,14 @@ backup_now() {
     printf 'ไม่รวม secrets.json / API Key\n'
     printf 'ไฟล์ ZIP จะถูกเก็บใน Downloads > Stage Zero Backups\n\n'
 
+    acquire_wake_lock
     if create_backup "Backup"; then
         okf '✓ สำรองข้อมูลเรียบร้อย\n\n'
         printf '%s\n' "$(backup_display_path "$LAST_BACKUP_PATH")"
         printf '\nหมายเหตุ: config.yaml อาจมีค่าการตั้งค่าเซิร์ฟเวอร์ส่วนตัว ควรเก็บ ZIP ไว้กับตัว\n'
     fi
+    release_wake_lock
+
     pause_screen
 }
 
@@ -1060,7 +1149,7 @@ backup_zip_supported() {
 
     # Stage Zero backups have our marker plus a SillyTavern user-data tree.
     if printf '%s\n' "$names" | grep -Fxq 'stagezero-backup-info.txt' && \
-        printf '%s\n' "$names" | grep -Eq '^data/default-user/(settings\.json|characters/|chats/|worlds/|themes/)'; then
+       printf '%s\n' "$names" | grep -Eq '^data/default-user/(settings\.json|characters/|chats/|worlds/|themes/)'; then
         return 0
     fi
 
@@ -1162,12 +1251,16 @@ restore_menu() {
     printf '0. ยกเลิก\n\n'
     promptf 'เลือกเมนู: '
     read_choice choice
+
     if [[ "$choice" == "1" ]]; then
         printf '\n'
+        acquire_wake_lock
         if restore_from_zip "$selected"; then
+            release_wake_lock
             post_restore_action
             return 0
         else
+            release_wake_lock
             pause_screen
             return 2
         fi
@@ -1303,9 +1396,12 @@ uninstall_st() {
     read_choice choice
     [[ "$choice" == "1" ]] || return
 
+    acquire_wake_lock
+
     printf '\nกำลังสร้าง Backup ก่อนถอนการติดตั้ง...\n'
     if ! create_backup "BeforeUninstall"; then
         printf '\nBackup ไม่สำเร็จ จึงยกเลิกการถอนการติดตั้ง\n'
+        release_wake_lock
         pause_screen
         return
     fi
@@ -1316,18 +1412,20 @@ uninstall_st() {
     printf '0. ยกเลิก\n\n'
     promptf 'เลือกเมนู: '
     read_choice choice
-    [[ "$choice" == "1" ]] || return
+    if [[ "$choice" != "1" ]]; then
+        release_wake_lock
+        return
+    fi
 
-    # Safety guard: only remove the exact configured ST directory.
     if [[ "$ST_DIR" != "$HOME/SillyTavern" ]]; then
         printf '\nตำแหน่งติดตั้งไม่ใช่ค่ามาตรฐาน ระบบจึงไม่ลบอัตโนมัติเพื่อความปลอดภัย\n'
+        release_wake_lock
         pause_screen
         return
     fi
 
     rm -rf -- "$ST_DIR"
 
-    # Restore any previous `st` executable that the installer preserved.
     if [[ -e "$HELPER_DIR/original-st-launcher" || -L "$HELPER_DIR/original-st-launcher" ]]; then
         rm -f -- "$LAUNCHER_PATH"
         cp -a "$HELPER_DIR/original-st-launcher" "$LAUNCHER_PATH" 2>/dev/null || true
@@ -1335,20 +1433,19 @@ uninstall_st() {
         rm -f -- "$LAUNCHER_PATH"
     fi
 
-    # Re-enable a previous bash alias only if Stage Zero disabled it.
     if [[ -f "$HOME/.bashrc" ]] && grep -q '^# Stage Zero disabled previous st alias: ' "$HOME/.bashrc" 2>/dev/null; then
         local bashrc_tmp="$HELPER_DIR/.bashrc-restore-$$"
         sed 's/^# Stage Zero disabled previous st alias: //' "$HOME/.bashrc" > "$bashrc_tmp" && cat "$bashrc_tmp" > "$HOME/.bashrc"
         rm -f "$bashrc_tmp"
     fi
 
-
     printf '\n✓ ถอนการติดตั้ง SillyTavern เรียบร้อย\n'
     okf '✓ Backup ยังอยู่ใน Downloads > Stage Zero Backups\n'
     okf '✓ Termux ไม่ได้รับผลกระทบ\n\n'
     printf '%s\n' "$(backup_display_path "$LAST_BACKUP_PATH")"
 
-    # The current shell has already loaded this script, so removing the helper is safe now.
+    release_wake_lock
+
     rm -rf -- "$HELPER_DIR"
     exit 0
 }
@@ -1411,7 +1508,21 @@ write_launcher() {
     cat > "$LAUNCHER_PATH" <<'LAUNCHER_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 # Stage Zero Launcher
-exec "$HOME/.stagezero-st/menu.sh" "$@"
+
+case "${1:-}" in
+    end)
+        if command -v termux-wake-unlock >/dev/null 2>&1; then
+            termux-wake-unlock >/dev/null 2>&1 || true
+            printf '✓ ปลด Wake Lock เรียบร้อย\n'
+        else
+            printf 'ไม่พบคำสั่ง Wake Lock ของ Termux\n'
+        fi
+        exit 0
+        ;;
+    *)
+        exec "$HOME/.stagezero-st/menu.sh" "$@"
+        ;;
+esac
 LAUNCHER_EOF
     chmod +x "$LAUNCHER_PATH"
 }
@@ -1437,16 +1548,14 @@ finish_install() {
         promptf 'เลือกเมนู: '
         local choice
         read_choice choice
+
         if [[ "$choice" == "1" ]]; then
             "$MENU_PATH" --restore-install
             local restore_status=$?
 
-            # A successful restore already shows the post-restore action menu.
             if (( restore_status == 0 )); then
                 return
             fi
-            # If no backup was found, the user cancelled, or restore failed,
-            # continue below and let the user choose whether to open ST or exit.
         elif [[ "$choice" == "2" ]]; then
             printf '\nกำลังเปิด SillyTavern...\n'
             "$MENU_PATH" --start
@@ -1464,6 +1573,7 @@ finish_install() {
         "$MENU_PATH" --start
     fi
 }
+
 main() {
     header
     printf '\nInstaller v%s\n' "$INSTALLER_VERSION"
@@ -1472,6 +1582,9 @@ main() {
     if ! is_termux; then
         fail "Installer นี้ออกแบบสำหรับ Termux บน Android เท่านั้น"
     fi
+
+    acquire_install_wake_lock
+    trap release_install_wake_lock EXIT
 
     if ! install_packages; then
         printf '\nStage Zero Installer v%s หยุดทำงานก่อนติดตั้ง SillyTavern\n' "$INSTALLER_VERSION"
@@ -1485,6 +1598,9 @@ main() {
     write_menu
     write_launcher
     okf '✓ สร้างคำสั่ง st เรียบร้อย\n'
+
+    # Installation is complete. First-run restore/start actions manage their own Wake Lock.
+    release_install_wake_lock
 
     finish_install
 }
