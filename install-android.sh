@@ -109,6 +109,10 @@ st_valid() {
 }
 
 acquire_install_wake_lock() {
+    # เคารพค่าที่ผู้ใช้ปิด Wake Lock ไว้ (กรณีติดตั้งซ้ำ)
+    if grep -qx 'enabled=0' "$HELPER_DIR/wakelock.conf" 2>/dev/null; then
+        return 0
+    fi
     if command -v termux-wake-lock >/dev/null 2>&1; then
         if termux-wake-lock >/dev/null 2>&1; then
             INSTALL_WAKE_LOCK_ACTIVE=1
@@ -366,6 +370,8 @@ DOWNLOADS_DIR="$HOME/storage/downloads"
 BACKUP_DIR="$DOWNLOADS_DIR/Stage Zero Backups"
 RETURN_TO_MAIN=0
 WAKE_LOCK_DEPTH=0
+WAKE_LOCK_HELD=0
+WAKE_LOCK_CONF="$HELPER_DIR/wakelock.conf"
 
 # สีของข้อความ Stage Zero เพื่อแยก UI ของ Helper ออกจาก log ปกติของ Termux/SillyTavern.
 if [[ -t 1 && "${TERM:-dumb}" != "dumb" ]]; then
@@ -455,10 +461,22 @@ pause_screen() {
     read_choice _pause
 }
 
+# ค่าเริ่มต้น = เปิด Wake Lock; ปิดได้จากเมนู 7 (เก็บไว้ใน wakelock.conf)
+wake_lock_enabled() {
+    ! grep -qx 'enabled=0' "$WAKE_LOCK_CONF" 2>/dev/null
+}
+
+set_wake_lock_enabled() {
+    mkdir -p "$HELPER_DIR"
+    printf 'enabled=%s\n' "$1" > "$WAKE_LOCK_CONF"
+}
+
+# acquire_wake_lock force = ล็อกเสมอแม้ผู้ใช้ปิด Wake Lock (ใช้กับ Backup/Restore/ถอนติดตั้ง)
 acquire_wake_lock() {
-    if (( WAKE_LOCK_DEPTH == 0 )); then
+    local force="${1:-}"
+    if (( WAKE_LOCK_HELD == 0 )) && { [[ "$force" == "force" ]] || wake_lock_enabled; }; then
         if command -v termux-wake-lock >/dev/null 2>&1; then
-            termux-wake-lock >/dev/null 2>&1 || true
+            termux-wake-lock >/dev/null 2>&1 && WAKE_LOCK_HELD=1
         fi
     fi
     ((WAKE_LOCK_DEPTH += 1))
@@ -472,21 +490,63 @@ release_wake_lock() {
     fi
 
     ((WAKE_LOCK_DEPTH -= 1))
-    if (( WAKE_LOCK_DEPTH == 0 )); then
+    if (( WAKE_LOCK_DEPTH == 0 && WAKE_LOCK_HELD == 1 )); then
         if command -v termux-wake-unlock >/dev/null 2>&1; then
             termux-wake-unlock >/dev/null 2>&1 || true
         fi
+        WAKE_LOCK_HELD=0
     fi
     return 0
 }
 
 cleanup_wake_lock() {
-    if (( WAKE_LOCK_DEPTH > 0 )); then
+    if (( WAKE_LOCK_HELD == 1 )); then
         if command -v termux-wake-unlock >/dev/null 2>&1; then
             termux-wake-unlock >/dev/null 2>&1 || true
         fi
-        WAKE_LOCK_DEPTH=0
     fi
+    WAKE_LOCK_HELD=0
+    WAKE_LOCK_DEPTH=0
+}
+
+wake_lock_menu() {
+    while true; do
+        screen_clear
+        printf 'ตั้งค่า Wake Lock\n\n'
+        printf 'Wake Lock ช่วยกันไม่ให้ Android ปิด Termux ตอนจอดับ\n'
+        printf 'ระหว่างเปิด SillyTavern / อัปเดต / Backup\n'
+        printf 'ถ้าปิดไว้ อาจกินแบตน้อยลง แต่ ST อาจหลุดเมื่อพักหน้าจอนาน ๆ\n'
+        printf 'หมายเหตุ: Backup / Restore / ถอนการติดตั้ง จะเปิด Wake Lock เสมอ\n'
+        printf 'แล้วปลดให้อัตโนมัติเมื่อเสร็จ เพื่อไม่ให้ข้อมูลเสียกลางทาง\n\n'
+        if wake_lock_enabled; then
+            printf 'สถานะตอนนี้: '; okf 'เปิด\n\n'
+            printf '1. ปิด Wake Lock\n'
+        else
+            printf 'สถานะตอนนี้: '; warnf 'ปิด\n\n'
+            printf '1. เปิด Wake Lock\n'
+        fi
+        printf '0. กลับ\n\n'
+        promptf 'เลือกเมนู: '
+        local choice
+        read_choice choice
+        case "$choice" in
+            1)
+                if wake_lock_enabled; then
+                    set_wake_lock_enabled 0
+                    # ปลด Wake Lock ที่อาจค้างอยู่จากครั้งก่อน
+                    if command -v termux-wake-unlock >/dev/null 2>&1; then
+                        termux-wake-unlock >/dev/null 2>&1 || true
+                    fi
+                    okf '\n✓ ปิด Wake Lock แล้ว\n'
+                else
+                    set_wake_lock_enabled 1
+                    okf '\n✓ เปิด Wake Lock แล้ว\n'
+                fi
+                pause_screen
+                ;;
+            0) return ;;
+        esac
+    done
 }
 
 trap cleanup_wake_lock EXIT
@@ -594,6 +654,11 @@ show_support_info() {
         printf '%bNode.js:%b ไม่พบ\n' "$C_INFO" "$C_RESET"
     fi
     printf '%bGit:%b %s\n' "$C_INFO" "$C_RESET" "$(get_git_state)"
+    if wake_lock_enabled; then
+        printf '%bWake Lock:%b เปิด\n' "$C_INFO" "$C_RESET"
+    else
+        printf '%bWake Lock:%b ปิด\n' "$C_INFO" "$C_RESET"
+    fi
     printf '\n%bคัดลอกข้อมูลด้านบนแล้วส่งในห้องสอบถาม ได้เลย%b\n' "$C_WARN" "$C_RESET"
     printf '%bเพิ่มข้อมูลโมเดล, พรีเซตที่ใช้, และปัญหาในโพสต์ด้วย%b\n' "$C_WARN" "$C_RESET"
     pause_screen
@@ -979,7 +1044,7 @@ backup_now() {
     printf 'ไม่รวม secrets.json / API Key\n'
     printf 'ไฟล์ ZIP จะถูกเก็บใน Downloads > Stage Zero Backups\n\n'
 
-    acquire_wake_lock
+    acquire_wake_lock force
     if create_backup "Backup"; then
         okf '✓ สำรองข้อมูลเรียบร้อย\n\n'
         printf '%s\n' "$(backup_display_path "$LAST_BACKUP_PATH")"
@@ -1254,7 +1319,7 @@ restore_menu() {
 
     if [[ "$choice" == "1" ]]; then
         printf '\n'
-        acquire_wake_lock
+        acquire_wake_lock force
         if restore_from_zip "$selected"; then
             release_wake_lock
             post_restore_action
@@ -1396,7 +1461,7 @@ uninstall_st() {
     read_choice choice
     [[ "$choice" == "1" ]] || return
 
-    acquire_wake_lock
+    acquire_wake_lock force
 
     printf '\nกำลังสร้าง Backup ก่อนถอนการติดตั้ง...\n'
     if ! create_backup "BeforeUninstall"; then
@@ -1461,6 +1526,11 @@ main_menu() {
         printf '4. สำรองข้อมูล\n'
         printf '5. ตั้งค่า config.yaml\n'
         printf '6. ถอนการติดตั้ง SillyTavern\n'
+        if wake_lock_enabled; then
+            printf '7. Wake Lock: เปิดอยู่\n'
+        else
+            printf '7. Wake Lock: ปิดอยู่\n'
+        fi
         printf '\n0. ออก\n\n'
         promptf 'เลือกเมนู: '
 
@@ -1473,6 +1543,7 @@ main_menu() {
             4) backup_restore_menu ;;
             5) config_menu ;;
             6) uninstall_st ;;
+            7) wake_lock_menu ;;
             0) exit 0 ;;
         esac
     done
