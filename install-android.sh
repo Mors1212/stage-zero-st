@@ -5,7 +5,7 @@
 
 set -u
 
-INSTALLER_VERSION="1.0.0"
+INSTALLER_VERSION="1.1.0"
 ST_DIR="$HOME/SillyTavern"
 HELPER_DIR="$HOME/.stagezero-st"
 MENU_PATH="$HELPER_DIR/menu.sh"
@@ -461,7 +461,7 @@ pause_screen() {
     read_choice _pause
 }
 
-# ค่าเริ่มต้น = เปิด Wake Lock; ปิดได้จากเมนู 7 (เก็บไว้ใน wakelock.conf)
+# ค่าเริ่มต้น = เปิด Wake Lock; ปิดได้จากเมนู 6 (เก็บไว้ใน wakelock.conf)
 wake_lock_enabled() {
     ! grep -qx 'enabled=0' "$WAKE_LOCK_CONF" 2>/dev/null
 }
@@ -1525,12 +1525,12 @@ main_menu() {
         printf '3. ST เปิดไม่ได้ / แก้ปัญหา\n'
         printf '4. สำรองข้อมูล\n'
         printf '5. ตั้งค่า config.yaml\n'
-        printf '6. ถอนการติดตั้ง SillyTavern\n'
         if wake_lock_enabled; then
-            printf '7. Wake Lock: เปิดอยู่\n'
+            printf '6. Wake Lock: เปิดอยู่\n'
         else
-            printf '7. Wake Lock: ปิดอยู่\n'
+            printf '6. Wake Lock: ปิดอยู่\n'
         fi
+        printf '7. ถอนการติดตั้ง SillyTavern\n'
         printf '\n0. ออก\n\n'
         promptf 'เลือกเมนู: '
 
@@ -1542,8 +1542,8 @@ main_menu() {
             3) troubleshoot_menu ;;
             4) backup_restore_menu ;;
             5) config_menu ;;
-            6) uninstall_st ;;
-            7) wake_lock_menu ;;
+            6) wake_lock_menu ;;
+            7) uninstall_st ;;
             0) exit 0 ;;
         esac
     done
